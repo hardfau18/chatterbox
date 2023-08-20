@@ -1,4 +1,4 @@
-use std::io::{BufRead, Write};
+use std::io::BufRead;
 
 use clap::Parser;
 use tracing::{debug, error, info, instrument, warn};
@@ -17,6 +17,7 @@ struct Args {
     verbose: u8,
 }
 
+#[instrument(skip(reader))]
 fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
     let mut buf = String::new();
     'read: loop {
@@ -35,6 +36,7 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
     }
 }
 
+#[instrument(skip(writer))]
 fn write_msgs(mut writer: impl std::io::Write) {
     let mut buf = String::new();
     let mut stdin = std::io::BufReader::new(std::io::stdin());
