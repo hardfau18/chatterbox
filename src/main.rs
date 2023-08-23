@@ -11,13 +11,23 @@ static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::ne
 
 #[derive(Debug, Parser)]
 struct Args {
-    #[arg(short, long, help = "remote address")]
-    address: String,
+    #[arg(
+        short,
+        long,
+        help = "remote address",
+        required_unless_present("server")
+    )]
+    address: Option<String>,
     #[arg(short, long, help = "remote port", default_value_t = 8989)]
     port: u16,
     #[arg(short, long, help = "listening address", default_value_t = 8989)]
     listen: u16,
-    #[arg(short, long, help = "run as server")]
+    #[arg(
+        short,
+        long,
+        help = "run as server",
+        required_unless_present("address")
+    )]
     server: bool,
     #[arg(short, long, help = "sets the logging level", action=clap::ArgAction::Count)]
     verbose: u8,
@@ -187,7 +197,23 @@ impl App {
 }
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) -> io::Result<()> {
-    let mut stream = std::net::TcpStream::connect((args.address.as_str(), args.port))?;
+    let mut stream = {
+        let address = args.address.as_ref().map_or("0.0.0.0", |s| s.as_str());
+        warn!("Waiting for client on {address}:{}", args.port);
+        if args.server {
+            std::net::TcpListener::bind((address, args.port))?
+                .accept()?
+                .0
+        } else {
+            std::net::TcpStream::connect((
+                args.address
+                    .as_ref()
+                    .expect("since server is necessary if the address is not given")
+                    .as_str(),
+                args.port,
+            ))?
+        }
+    };
     let reader = std::io::BufReader::new(stream.try_clone()?);
     let reciever_buffer = Arc::clone(&app.messages);
     std::thread::spawn(move || reciever(reader, reciever_buffer));
