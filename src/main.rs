@@ -259,9 +259,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         }
     }
     let messages: Vec<ListItem> = {
-        app.messages
-            .lock()
-            .unwrap()
+        let lock = app.messages.lock().unwrap();
+        lock[lock.len().saturating_sub(chunks[0].height as usize).. lock.len()]
             .iter()
             .map(|m| {
                 let content = Line::from(Span::raw(format!("> {m}")));
