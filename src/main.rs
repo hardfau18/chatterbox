@@ -7,6 +7,7 @@ use clap::Parser;
 use tracing::{debug, error, instrument, warn};
 
 static TERMINATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -35,7 +36,8 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex
                 };
                 debug!("recieved data: {:?}", buf.as_bytes());
                 if let Ok(mut lock) = dest.lock() {
-                    lock.push(buf.trim().to_string())
+                    lock.push(buf.trim().to_string());
+                    REDRAW.store(true, Ordering::Release);
                 }
             }
             Err(e) => warn!("Failed to read data: {e}"),
@@ -190,39 +192,49 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
     let reciever_buffer = Arc::clone(&app.messages);
     std::thread::spawn(move || reciever(reader, reciever_buffer));
     loop {
-        terminal.draw(|f| ui(f, &app))?;
+        if let Ok(true) = REDRAW.compare_exchange(
+            true,
+            false,
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Relaxed,
+        ) {
+            terminal.draw(|f| ui(f, &app))?;
+        }
 
-        if let Event::Key(key) = event::read()? {
-            match app.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('i') => {
-                        app.input_mode = InputMode::Editing;
-                    }
-                    KeyCode::Char('q') => {
-                        return Ok(());
-                    }
+        if crossterm::event::poll(std::time::Duration::from_millis(200))? {
+            if let Event::Key(key) = event::read()? {
+                REDRAW.store(true, Ordering::Release);
+                match app.input_mode {
+                    InputMode::Normal => match key.code {
+                        KeyCode::Char('i') => {
+                            app.input_mode = InputMode::Editing;
+                        }
+                        KeyCode::Char('q') => {
+                            return Ok(());
+                        }
+                        _ => {}
+                    },
+                    InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
+                        KeyCode::Enter => app.submit_message(&mut stream),
+                        KeyCode::Char(to_insert) => {
+                            app.enter_char(to_insert);
+                        }
+                        KeyCode::Backspace => {
+                            app.delete_char();
+                        }
+                        KeyCode::Left => {
+                            app.move_cursor_left();
+                        }
+                        KeyCode::Right => {
+                            app.move_cursor_right();
+                        }
+                        KeyCode::Esc => {
+                            app.input_mode = InputMode::Normal;
+                        }
+                        _ => {}
+                    },
                     _ => {}
-                },
-                InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                    KeyCode::Enter => app.submit_message(&mut stream),
-                    KeyCode::Char(to_insert) => {
-                        app.enter_char(to_insert);
-                    }
-                    KeyCode::Backspace => {
-                        app.delete_char();
-                    }
-                    KeyCode::Left => {
-                        app.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        app.move_cursor_right();
-                    }
-                    KeyCode::Esc => {
-                        app.input_mode = InputMode::Normal;
-                    }
-                    _ => {}
-                },
-                _ => {}
+                }
             }
         }
     }
@@ -260,7 +272,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     }
     let messages: Vec<ListItem> = {
         let lock = app.messages.lock().unwrap();
-        lock[lock.len().saturating_sub(chunks[0].height as usize).. lock.len()]
+        lock[lock.len().saturating_sub(chunks[0].height as usize)..lock.len()]
             .iter()
             .map(|m| {
                 let content = Line::from(Span::raw(format!("> {m}")));
