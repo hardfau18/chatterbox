@@ -1,7 +1,9 @@
-use std::io::BufRead;
+use std::{io::BufRead, sync::atomic::Ordering};
 
 use clap::Parser;
 use tracing::{debug, error, info, instrument, warn};
+
+static TERMINATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -20,11 +22,12 @@ struct Args {
 #[instrument(skip(reader))]
 fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
     let mut buf = String::new();
-    'read: loop {
+    'read: while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         match reader.read_line(&mut buf) {
             Ok(size) => {
                 if size == 0 {
                     warn!("May be other end is closed!");
+                    TERMINATE.store(true, Ordering::Release);
                     break 'read;
                 };
                 debug!("recieved data: {:?}", buf.as_bytes());
@@ -40,11 +43,12 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
 fn write_msgs(mut writer: impl std::io::Write) {
     let mut buf = String::new();
     let mut stdin = std::io::BufReader::new(std::io::stdin());
-    'write: loop {
+    'write: while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         match stdin.read_line(&mut buf) {
             Ok(size) => {
                 if size == 0 {
                     info!("Closing connection");
+                    TERMINATE.store(true, Ordering::Release);
                     break 'write;
                 }
                 if let Err(e) = writer.write_all(buf.as_bytes()) {
