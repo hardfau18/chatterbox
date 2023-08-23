@@ -195,7 +195,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
         if let Event::Key(key) = event::read()? {
             match app.input_mode {
                 InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
+                    KeyCode::Char('i') => {
                         app.input_mode = InputMode::Editing;
                     }
                     KeyCode::Char('q') => {
