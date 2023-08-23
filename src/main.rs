@@ -60,6 +60,32 @@ fn write_msgs(mut writer: impl std::io::Write) {
         }
     }
 }
+
+type Terminal = ratatui::Terminal<ratatui::backend::CrosstermBackend<std::io::Stdout>>;
+
+#[instrument]
+fn init_terminal() -> Result<Terminal, std::io::Error> {
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    crossterm::execute!(
+        stdout,
+        crossterm::terminal::EnterAlternateScreen,
+        crossterm::event::EnableMouseCapture
+    )?;
+    let backend = ratatui::backend::CrosstermBackend::new(stdout);
+    ratatui::Terminal::new(backend)
+}
+#[instrument(skip(terminal))]
+fn reset_terminal(mut terminal: Terminal) -> Result<(), std::io::Error> {
+    crossterm::terminal::disable_raw_mode()?;
+    crossterm::execute!(
+        terminal.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen,
+        crossterm::event::DisableMouseCapture
+    )?;
+    terminal.show_cursor()?;
+    Ok(())
+}
 #[instrument]
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -74,9 +100,18 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     debug!("setting log level to {level}");
+    let mut terminal = init_terminal()?;
+    terminal.draw(|f| {
+        let size = f.size();
+        let block = ratatui::widgets::Block::default()
+            .title("chatterbox")
+            .borders(ratatui::widgets::Borders::ALL);
+        f.render_widget(block, size);
+    })?;
     let stream = std::net::TcpStream::connect((args.address, args.port))?;
     let reader = std::io::BufReader::new(stream.try_clone()?);
     std::thread::spawn(move || reciever(reader));
     write_msgs(stream);
+    reset_terminal(terminal)?;
     Ok(())
 }
