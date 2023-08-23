@@ -233,9 +233,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         .direction(Direction::Vertical)
         .constraints(
             [
-                Constraint::Length(1),
-                Constraint::Length(3),
                 Constraint::Min(1),
+                Constraint::Length(3),
+                Constraint::Length(1),
             ]
             .as_ref(),
         )
@@ -266,7 +266,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let mut text = Text::from(Line::from(msg));
     text.patch_style(style);
     let help_message = Paragraph::new(text);
-    f.render_widget(help_message, chunks[0]);
+    f.render_widget(help_message, chunks[2]);
 
     let input = Paragraph::new(app.input.as_str())
         .style(match app.input_mode {
@@ -304,5 +304,5 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     drop(lock);
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
-    f.render_widget(messages, chunks[2]);
+    f.render_widget(messages, chunks[0]);
 }
