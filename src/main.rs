@@ -1,6 +1,6 @@
 use std::{
     io::{self, BufRead},
-    sync::atomic::Ordering,
+    sync::{atomic::Ordering, Arc, Mutex},
 };
 
 use clap::Parser;
@@ -23,7 +23,7 @@ struct Args {
 }
 
 #[instrument(skip(reader))]
-fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
+fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex<Vec<String>>>) {
     let mut buf = String::new();
     'read: while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         match reader.read_line(&mut buf) {
@@ -34,7 +34,9 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>) {
                     break 'read;
                 };
                 debug!("recieved data: {:?}", buf.as_bytes());
-                println!("{}", buf.trim());
+                if let Ok(mut lock) = dest.lock() {
+                    lock.push(buf.trim().to_string())
+                }
             }
             Err(e) => warn!("Failed to read data: {e}"),
         }
@@ -107,7 +109,7 @@ struct App {
     /// Current input mode
     input_mode: InputMode,
     /// History of recorded messages
-    messages: Vec<String>,
+    messages: Arc<Mutex<Vec<String>>>,
 }
 
 impl Default for App {
@@ -115,7 +117,7 @@ impl Default for App {
         App {
             input: String::new(),
             input_mode: InputMode::Normal,
-            messages: Vec::new(),
+            messages: Arc::new(Mutex::new(Vec::new())),
             cursor_position: 0,
         }
     }
@@ -169,7 +171,11 @@ impl App {
     }
 
     fn submit_message(&mut self, writer: &mut impl std::io::Write) {
-        self.messages.push(self.input.clone());
+        if let Ok(mut lock) = self.messages.lock() {
+            lock.push(self.input.clone());
+        } else {
+            error!("Failed to lock messages, may be poisoned");
+        }
         if let Err(e) = writer.write_all(self.input.as_bytes()) {
             error!("Failed to send message {e}");
         }
@@ -181,7 +187,8 @@ impl App {
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) -> io::Result<()> {
     let mut stream = std::net::TcpStream::connect((args.address.as_str(), args.port))?;
     let reader = std::io::BufReader::new(stream.try_clone()?);
-    std::thread::spawn(move || reciever(reader));
+    let reciever_buffer = Arc::clone(&app.messages);
+    std::thread::spawn(move || reciever(reader, reciever_buffer));
     loop {
         terminal.draw(|f| ui(f, &app))?;
 
@@ -285,9 +292,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
             )
         }
     }
-
-    let messages: Vec<ListItem> = app
-        .messages
+    let lock = app.messages.lock().unwrap();
+    let messages: Vec<ListItem> = lock
         .iter()
         .enumerate()
         .map(|(i, m)| {
@@ -295,6 +301,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
             ListItem::new(content)
         })
         .collect();
+    drop(lock);
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
     f.render_widget(messages, chunks[2]);
