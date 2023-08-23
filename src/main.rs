@@ -258,16 +258,17 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
             )
         }
     }
-    let lock = app.messages.lock().unwrap();
-    let messages: Vec<ListItem> = lock
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            let content = Line::from(Span::raw(format!("{i}: {m}")));
-            ListItem::new(content)
-        })
-        .collect();
-    drop(lock);
+    let messages: Vec<ListItem> = {
+        app.messages
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|m| {
+                let content = Line::from(Span::raw(format!("> {m}")));
+                ListItem::new(content)
+            })
+            .collect()
+    };
     let messages =
         List::new(messages).block(Block::default().borders(Borders::ALL).title("Messages"));
     f.render_widget(messages, chunks[0]);
