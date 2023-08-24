@@ -49,9 +49,13 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex
                     break 'read;
                 };
                 debug!("recieved data: {:?}", buf.as_bytes());
-                if let Ok(mut lock) = dest.lock() {
-                    lock.push(buf.trim().to_string());
-                    REDRAW.store(true, Ordering::Release);
+                let msg = buf.trim();
+                // no point in printing empty message
+                if msg.len() > PREFIX.len() {
+                    if let Ok(mut lock) = dest.lock() {
+                        lock.push(msg.to_string());
+                        REDRAW.store(true, Ordering::Release);
+                    }
                 }
             }
             Err(e) => warn!("Failed to read data: {e}"),
@@ -207,16 +211,19 @@ impl App {
 
     fn submit_message(&mut self, writer: &mut impl std::io::Write) {
         const PREFIX: &str = "--> ";
-        if let Ok(mut lock) = self.messages.lock() {
-            let mut msg = PREFIX.to_string();
-            msg.push_str(self.input.as_str());
-            lock.push(msg);
-        } else {
-            error!("Failed to lock messages, may be poisoned");
-        }
-        self.input.push('\n');
-        if let Err(e) = writer.write_all(self.input.as_bytes()) {
-            error!("Failed to send message {e}");
+        let usr_str = self.input.trim();
+        if !usr_str.is_empty() {
+            if let Ok(mut lock) = self.messages.lock() {
+                let mut msg = PREFIX.to_string();
+                msg.push_str(usr_str);
+                lock.push(msg);
+            } else {
+                error!("Failed to lock messages, may be poisoned");
+            }
+            self.input.push('\n');
+            if let Err(e) = writer.write_all(self.input.as_bytes()) {
+                error!("Failed to send message {e}");
+            }
         }
         self.input.clear();
         self.reset_cursor();
