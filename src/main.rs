@@ -218,7 +218,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
     let reader = std::io::BufReader::new(stream.try_clone()?);
     let reciever_buffer = Arc::clone(&app.messages);
     std::thread::spawn(move || reciever(reader, reciever_buffer));
-    loop {
+    while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         if let Ok(true) = REDRAW.compare_exchange(
             true,
             false,
@@ -265,6 +265,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
             }
         }
     }
+    Ok(())
 }
 
 fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
@@ -300,7 +301,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
     let messages: Vec<ListItem> = {
         let lock = app.messages.lock().unwrap();
         // ignore borders
-        lock[lock.len().saturating_sub(chunks[0].height as usize -2)..lock.len()]
+        lock[lock.len().saturating_sub(chunks[0].height as usize - 2)..lock.len()]
             .iter()
             .map(|m| {
                 let content = Line::from(Span::raw(format!("> {m}")));
