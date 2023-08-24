@@ -98,10 +98,27 @@ fn main() -> anyhow::Result<()> {
     debug!("setting log level to {level}");
     while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         RESET.store(false, Ordering::Release);
+        let stream = {
+            let address = args.address.as_ref().map_or("0.0.0.0", |s| s.as_str());
+            warn!("Waiting for client on {address}:{}", args.port);
+            if args.server {
+                std::net::TcpListener::bind((address, args.port))?
+                    .accept()?
+                    .0
+            } else {
+                std::net::TcpStream::connect((
+                    args.address
+                        .as_ref()
+                        .expect("since server is necessary if the address is not given")
+                        .as_str(),
+                    args.port,
+                ))?
+            }
+        };
         let mut terminal = init_terminal()?;
         // create app and run it
         let app = App::default();
-        let res = run_app(&mut terminal, app, &args);
+        let res = run_app(&mut terminal, app, stream);
         reset_terminal(terminal)?;
         res?;
     }
@@ -201,24 +218,11 @@ impl App {
     }
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) -> io::Result<()> {
-    let mut stream = {
-        let address = args.address.as_ref().map_or("0.0.0.0", |s| s.as_str());
-        warn!("Waiting for client on {address}:{}", args.port);
-        if args.server {
-            std::net::TcpListener::bind((address, args.port))?
-                .accept()?
-                .0
-        } else {
-            std::net::TcpStream::connect((
-                args.address
-                    .as_ref()
-                    .expect("since server is necessary if the address is not given")
-                    .as_str(),
-                args.port,
-            ))?
-        }
-    };
+fn run_app<B: Backend>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+    mut stream: std::net::TcpStream,
+) -> io::Result<()> {
     let reader = std::io::BufReader::new(stream.try_clone()?);
     let reciever_buffer = Arc::clone(&app.messages);
     std::thread::spawn(move || reciever(reader, reciever_buffer));
