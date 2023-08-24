@@ -6,6 +6,7 @@ use std::{
 use clap::Parser;
 use tracing::{debug, error, instrument, warn};
 
+static RESET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static TERMINATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
@@ -36,12 +37,12 @@ struct Args {
 #[instrument(skip(reader))]
 fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex<Vec<String>>>) {
     let mut buf = String::new();
-    'read: while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
+    'read: while !RESET.load(std::sync::atomic::Ordering::Acquire) {
         match reader.read_line(&mut buf) {
             Ok(size) => {
                 if size == 0 {
                     warn!("May be other end is closed!");
-                    TERMINATE.store(true, Ordering::Release);
+                    RESET.store(true, Ordering::Release);
                     break 'read;
                 };
                 debug!("recieved data: {:?}", buf.as_bytes());
@@ -95,12 +96,15 @@ fn main() -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .init();
     debug!("setting log level to {level}");
-    let mut terminal = init_terminal()?;
-    // create app and run it
-    let app = App::default();
-    let res = run_app(&mut terminal, app, &args);
-    reset_terminal(terminal)?;
-    res?;
+    while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
+        RESET.store(false, Ordering::Release);
+        let mut terminal = init_terminal()?;
+        // create app and run it
+        let app = App::default();
+        let res = run_app(&mut terminal, app, &args);
+        reset_terminal(terminal)?;
+        res?;
+    }
     Ok(())
 }
 
@@ -218,7 +222,8 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
     let reader = std::io::BufReader::new(stream.try_clone()?);
     let reciever_buffer = Arc::clone(&app.messages);
     std::thread::spawn(move || reciever(reader, reciever_buffer));
-    while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
+    REDRAW.store(true, Ordering::Release);
+    while !RESET.load(std::sync::atomic::Ordering::Acquire) {
         if let Ok(true) = REDRAW.compare_exchange(
             true,
             false,
@@ -237,6 +242,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App, args: &Args) ->
                             app.input_mode = InputMode::Editing;
                         }
                         KeyCode::Char('q') => {
+                            TERMINATE.store(true, Ordering::Release);
                             return Ok(());
                         }
                         _ => {}
