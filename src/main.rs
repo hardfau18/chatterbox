@@ -183,6 +183,7 @@ impl App {
     }
 
     fn submit_message(&mut self, writer: &mut impl std::io::Write) {
+        self.input.push('\n');
         if let Ok(mut lock) = self.messages.lock() {
             lock.push(self.input.clone());
         } else {
