@@ -37,7 +37,10 @@ struct Args {
 #[instrument(skip(reader))]
 fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex<Vec<String>>>) {
     let mut buf = String::new();
+
+    const PREFIX: &str = "<-- ";
     'read: while !RESET.load(std::sync::atomic::Ordering::Acquire) {
+        buf.push_str(PREFIX);
         match reader.read_line(&mut buf) {
             Ok(size) => {
                 if size == 0 {
@@ -198,18 +201,20 @@ impl App {
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(0, self.input.len())
     }
-
     fn reset_cursor(&mut self) {
         self.cursor_position = 0;
     }
 
     fn submit_message(&mut self, writer: &mut impl std::io::Write) {
-        self.input.push('\n');
+        const PREFIX: &str = "--> ";
         if let Ok(mut lock) = self.messages.lock() {
-            lock.push(self.input.clone());
+            let mut msg = PREFIX.to_string();
+            msg.push_str(self.input.as_str());
+            lock.push(msg);
         } else {
             error!("Failed to lock messages, may be poisoned");
         }
+        self.input.push('\n');
         if let Err(e) = writer.write_all(self.input.as_bytes()) {
             error!("Failed to send message {e}");
         }
@@ -314,7 +319,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
         lock[lock.len().saturating_sub(chunks[0].height as usize - 2)..lock.len()]
             .iter()
             .map(|m| {
-                let content = Line::from(Span::raw(format!("> {m}")));
+                let content = Line::from(Span::raw(m.clone()));
                 ListItem::new(content)
             })
             .collect()
