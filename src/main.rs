@@ -1,3 +1,4 @@
+use notify_rust::Notification;
 use std::{
     io::{self, BufRead},
     sync::{atomic::Ordering, Arc, Mutex},
@@ -9,6 +10,7 @@ use tracing::{debug, error, instrument, warn};
 static RESET: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static TERMINATE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static REDRAW: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+static NOTIFY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[derive(Debug, Parser)]
 struct Args {
@@ -34,6 +36,20 @@ struct Args {
     verbose: u8,
 }
 
+#[instrument()]
+fn notify(msg: &str) {
+    if NOTIFY.load(Ordering::Acquire) {
+        if let Err(e) = Notification::new()
+            .summary("Chatterbox")
+            .body(msg)
+            .appname("ChatterBox")
+            .show()
+        {
+            warn!("Failed to send notification {e}")
+        }
+    }
+}
+
 #[instrument(skip(reader))]
 fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex<Vec<String>>>) {
     let mut buf = String::new();
@@ -52,10 +68,12 @@ fn reciever<T: std::io::Read>(mut reader: std::io::BufReader<T>, dest: Arc<Mutex
                 let msg = buf.trim();
                 // no point in printing empty message
                 if msg.len() > PREFIX.len() {
+                    let owned = msg.to_string();
                     if let Ok(mut lock) = dest.lock() {
-                        lock.push(msg.to_string());
+                        lock.push(owned);
                         REDRAW.store(true, Ordering::Release);
                     }
+                    notify(&msg[PREFIX.len()..]);
                 }
             }
             Err(e) => warn!("Failed to read data: {e}"),
@@ -73,7 +91,8 @@ fn init_terminal() -> Result<LocalTerminal, std::io::Error> {
     crossterm::execute!(
         stdout,
         crossterm::terminal::EnterAlternateScreen,
-        crossterm::event::EnableMouseCapture
+        crossterm::event::EnableMouseCapture,
+        crossterm::event::EnableFocusChange
     )?;
     let backend = ratatui::backend::CrosstermBackend::new(stdout);
     ratatui::Terminal::new(backend)
@@ -250,40 +269,46 @@ fn run_app<B: Backend>(
         }
 
         if crossterm::event::poll(std::time::Duration::from_millis(200))? {
-            if let Event::Key(key) = event::read()? {
-                REDRAW.store(true, Ordering::Release);
-                match app.input_mode {
-                    InputMode::Normal => match key.code {
-                        KeyCode::Char('i') => {
-                            app.input_mode = InputMode::Editing;
-                        }
-                        KeyCode::Char('q') => {
-                            TERMINATE.store(true, Ordering::Release);
-                            return Ok(());
-                        }
+            match event::read()? {
+                Event::Key(key) => {
+                    REDRAW.store(true, Ordering::Release);
+                    match app.input_mode {
+                        InputMode::Normal => match key.code {
+                            KeyCode::Char('i') => {
+                                app.input_mode = InputMode::Editing;
+                            }
+                            KeyCode::Char('q') => {
+                                TERMINATE.store(true, Ordering::Release);
+                                return Ok(());
+                            }
+                            _ => {}
+                        },
+                        InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
+                            KeyCode::Enter => app.submit_message(&mut stream),
+                            KeyCode::Char(to_insert) => {
+                                app.enter_char(to_insert);
+                            }
+                            KeyCode::Backspace => {
+                                app.delete_char();
+                            }
+                            KeyCode::Left => {
+                                app.move_cursor_left();
+                            }
+                            KeyCode::Right => {
+                                app.move_cursor_right();
+                            }
+                            KeyCode::Esc => {
+                                app.input_mode = InputMode::Normal;
+                            }
+                            _ => {}
+                        },
                         _ => {}
-                    },
-                    InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
-                        KeyCode::Enter => app.submit_message(&mut stream),
-                        KeyCode::Char(to_insert) => {
-                            app.enter_char(to_insert);
-                        }
-                        KeyCode::Backspace => {
-                            app.delete_char();
-                        }
-                        KeyCode::Left => {
-                            app.move_cursor_left();
-                        }
-                        KeyCode::Right => {
-                            app.move_cursor_right();
-                        }
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                        }
-                        _ => {}
-                    },
-                    _ => {}
+                    }
                 }
+                Event::FocusGained => NOTIFY.store(false, Ordering::Release),
+                Event::FocusLost => NOTIFY.store(true, Ordering::Release),
+                Event::Resize(_, _) => REDRAW.store(true, Ordering::Release),
+                Event::Mouse(_) | Event::Paste(_) => (),
             }
         }
     }
