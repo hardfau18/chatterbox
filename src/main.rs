@@ -34,6 +34,9 @@ struct Args {
     server: bool,
     #[arg(short, long, help = "sets the logging level", action=clap::ArgAction::Count)]
     verbose: u8,
+    /// write the logs to given file
+    #[arg(short, long)]
+    output: Option<String>,
 }
 
 #[instrument()]
@@ -117,10 +120,16 @@ fn main() -> anyhow::Result<()> {
         2 => tracing::Level::DEBUG,
         _ => tracing::Level::TRACE,
     };
-    tracing_subscriber::fmt()
-        .with_max_level(level)
-        .with_writer(std::io::stderr)
-        .init();
+    if let Some(op_file_name) = args.output {
+        let fd = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&op_file_name)
+            .unwrap_or_else(|e| panic!("Failed to open file {op_file_name}: {e}"));
+        tracing_subscriber::fmt()
+            .with_max_level(level)
+            .with_writer(fd)
+            .init()
+    }
     debug!("setting log level to {level}");
     while !TERMINATE.load(std::sync::atomic::Ordering::Acquire) {
         RESET.store(false, Ordering::Release);
